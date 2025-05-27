@@ -4,18 +4,19 @@ const csv = require('csv-parser');
 
 const app = express();
 const PORT = 3300;
+const PAGE_SIZE = 30;
+const FILE_PATH = 'LE.txt';
 
-// Load CSV data into memory
 let spareParts = [];
 
-fs.createReadStream('LE.txt')
-  .pipe(csv({ 
-    separator: '\t', 
-    headers: ['sn', 'name', 'ladu1', 'ladu2', 'ladu3', 'ladu4', 'ladu5', 'tyhi', 'price_no_vat', 'type', 'price'] 
+// 🔁 Load CSV file into memory
+fs.createReadStream(FILE_PATH)
+  .pipe(csv({
+    separator: '\t',
+    headers: ['sn', 'name', 'ladu1', 'ladu2', 'ladu3', 'ladu4', 'ladu5', 'tyhi', 'price_no_vat', 'type', 'price']
   }))
   .on('data', (row) => {
-    // Keep only essential fields as specified in requirements
-    const part = {
+    spareParts.push({
       sn: row.sn || '',
       name: row.name || '',
       ladu1: row.ladu1 || '',
@@ -26,121 +27,90 @@ fs.createReadStream('LE.txt')
       price_no_vat: parseFloat(row.price_no_vat) || 0,
       type: row.type || '',
       price: parseFloat(row.price) || 0
-    };
-    
-    spareParts.push(part);
+    });
   })
   .on('end', () => {
-    console.log(`CSV file successfully loaded. Total parts: ${spareParts.length}`);
+    console.log(`✅ CSV loaded. Total parts: ${spareParts.length}`);
   })
   .on('error', (err) => {
-    console.error('Error reading CSV file:', err);
+    console.error('❌ CSV loading error:', err);
   });
 
-// Root endpoint
+// 📍 Root endpoint
 app.get('/', (req, res) => {
-  res.json({ message: 'Spare Parts API is running' });
+  res.json({ message: 'Spare Parts API is running 🚀' });
 });
 
-// Main endpoint with pagination, filtering and sorting
+// 📦 /spare-parts with filtering, sorting, and pagination
 app.get('/spare-parts', (req, res) => {
+  let { name, sn, sort, page = 1 } = req.query;
+  page = parseInt(page);
   let results = [...spareParts];
-  
-  // Filter by name
-  if (req.query.name) {
-    results = results.filter(part => 
-      part.name.toLowerCase().includes(req.query.name.toLowerCase())
-    );
-  }
-  
-  // Filter by serial number
-  if (req.query.sn) {
-    results = results.filter(part => 
-      part.sn.toLowerCase().includes(req.query.sn.toLowerCase())
-    );
-  }
-  
-  // Sort results (before pagination!)
-  if (req.query.sort) {
-    const sortField = req.query.sort.startsWith('-') ? req.query.sort.slice(1) : req.query.sort;
-    const isDescending = req.query.sort.startsWith('-');
-    
+
+  if (name) results = results.filter(p => p.name.toLowerCase().includes(name.toLowerCase()));
+  if (sn) results = results.filter(p => p.sn.toLowerCase().includes(sn.toLowerCase()));
+
+  if (sort) {
+    const field = sort.replace(/^-/, '');
+    const desc = sort.startsWith('-');
+
     results.sort((a, b) => {
-      let aVal = a[sortField];
-      let bVal = b[sortField];
-      
-      // Handle numeric sorting for price
-      if (sortField === 'price') {
-        return isDescending ? bVal - aVal : aVal - bVal;
-      }
-      
-      // Handle string sorting
-      aVal = String(aVal).toLowerCase();
-      bVal = String(bVal).toLowerCase();
-      
-      if (aVal < bVal) return isDescending ? 1 : -1;
-      if (aVal > bVal) return isDescending ? -1 : 1;
+      const aVal = isNaN(a[field]) ? String(a[field]).toLowerCase() : parseFloat(a[field]);
+      const bVal = isNaN(b[field]) ? String(b[field]).toLowerCase() : parseFloat(b[field]);
+
+      if (aVal < bVal) return desc ? 1 : -1;
+      if (aVal > bVal) return desc ? -1 : 1;
       return 0;
     });
   }
-  
-  // Pagination (30 items per page as required)
-  const page = parseInt(req.query.page) || 1;
-  const limit = 30;
-  const startIndex = (page - 1) * limit;
-  const endIndex = page * limit;
-  
-  const paginatedResults = results.slice(startIndex, endIndex);
-  
+
+  const start = (page - 1) * PAGE_SIZE;
+  const pagedResults = results.slice(start, start + PAGE_SIZE);
+
   res.json({
-    page: page,
+    page,
     totalItems: results.length,
-    totalPages: Math.ceil(results.length / limit),
-    itemsPerPage: limit,
-    data: paginatedResults
+    totalPages: Math.ceil(results.length / PAGE_SIZE),
+    itemsPerPage: PAGE_SIZE,
+    data: pagedResults
   });
 });
 
-// Alternative search endpoint as mentioned in requirements
+// 🔍 Full-text search (name/sn)
 app.get('/spare-parts/search/:searchTerm', (req, res) => {
   const searchTerm = req.params.searchTerm.toLowerCase();
-  
-  let results = spareParts.filter(part => 
-    part.name.toLowerCase().includes(searchTerm) || 
-    part.sn.toLowerCase().includes(searchTerm)
-  );
-  
-  // Pagination for search results
   const page = parseInt(req.query.page) || 1;
-  const limit = 30;
-  const startIndex = (page - 1) * limit;
-  const endIndex = page * limit;
-  
-  const paginatedResults = results.slice(startIndex, endIndex);
-  
+
+  const filtered = spareParts.filter(p =>
+    p.name.toLowerCase().includes(searchTerm) ||
+    p.sn.toLowerCase().includes(searchTerm)
+  );
+
+  const start = (page - 1) * PAGE_SIZE;
+  const paged = filtered.slice(start, start + PAGE_SIZE);
+
   res.json({
-    searchTerm: req.params.searchTerm,
-    page: page,
-    totalItems: results.length,
-    totalPages: Math.ceil(results.length / limit),
-    itemsPerPage: limit,
-    data: paginatedResults
+    searchTerm,
+    page,
+    totalItems: filtered.length,
+    totalPages: Math.ceil(filtered.length / PAGE_SIZE),
+    itemsPerPage: PAGE_SIZE,
+    data: paged
   });
 });
-
-// Error handling
+//------------------------------------------------------------------------------------------------------------
+// 🧯 404 Handler
 app.use((req, res) => {
-  res.status(404).json({ error: 'Endpoint not found' });
+  res.status(404).json({ error: 'Route not found' });
 });
 
+// 💥 Error Handler
 app.use((err, req, res, next) => {
-  console.error(err.stack);
-  res.status(500).json({ error: 'Server error' });
+  console.error('🔥 Error:', err.stack);
+  res.status(500).json({ error: 'Internal server error' });
 });
 
-// Start server
+// 🔊 Start the server
 app.listen(PORT, () => {
-  console.log(`Server running on http://localhost:${PORT}`);
+  console.log(`🛠️ Server running on http://localhost:${PORT}`);
 });
-
- 
